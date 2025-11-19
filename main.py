@@ -251,8 +251,7 @@ def ensure_directory_exists(directory: str):
 
 def get_output_path(subfolder: str, filename: str) -> str:
     """获取输出路径"""
-    date_folder = format_date_folder()
-    output_dir = Path("output") / date_folder / subfolder
+    output_dir = Path("output") / "latest" / subfolder
     ensure_directory_exists(str(output_dir))
     return str(output_dir / filename)
 
@@ -302,15 +301,14 @@ def check_version_update(
 
 
 def is_first_crawl_today() -> bool:
-    """检测是否是当天第一次爬取"""
-    date_folder = format_date_folder()
-    txt_dir = Path("output") / date_folder / "txt"
+    """检测是否是第一次爬取"""
+    txt_dir = Path("output") / "latest" / "txt"
 
     if not txt_dir.exists():
         return True
 
-    files = sorted([f for f in txt_dir.iterdir() if f.suffix == ".txt"])
-    return len(files) <= 1
+    news_file = txt_dir / "news.txt"
+    return not news_file.exists()
 
 
 def html_escape(text: str) -> str:
@@ -555,7 +553,7 @@ class DataFetcher:
 # === 数据处理 ===
 def save_titles_to_file(results: Dict, id_to_name: Dict, failed_ids: List) -> str:
     """保存标题到文件"""
-    file_path = get_output_path("txt", f"{format_time_filename()}.txt")
+    file_path = get_output_path("txt", "news.txt")
 
     with open(file_path, "w", encoding="utf-8") as f:
         for id_value, title_data in results.items():
@@ -730,43 +728,39 @@ def parse_file_titles(file_path: Path) -> Tuple[Dict, Dict]:
 def read_all_today_titles(
     current_platform_ids: Optional[List[str]] = None,
 ) -> Tuple[Dict, Dict, Dict]:
-    """读取当天所有标题文件，支持按当前监控平台过滤"""
-    date_folder = format_date_folder()
-    txt_dir = Path("output") / date_folder / "txt"
+    """读取所有标题文件，支持按当前监控平台过滤"""
+    txt_dir = Path("output") / "latest" / "txt"
+    news_file = txt_dir / "news.txt"
 
-    if not txt_dir.exists():
+    if not news_file.exists():
         return {}, {}, {}
 
     all_results = {}
     final_id_to_name = {}
     title_info = {}
 
-    files = sorted([f for f in txt_dir.iterdir() if f.suffix == ".txt"])
+    # 只读取 news.txt 文件
+    titles_by_id, file_id_to_name = parse_file_titles(news_file)
 
-    for file_path in files:
-        time_info = file_path.stem
-
-        titles_by_id, file_id_to_name = parse_file_titles(file_path)
-
-        if current_platform_ids is not None:
-            filtered_titles_by_id = {}
-            filtered_id_to_name = {}
-
-            for source_id, title_data in titles_by_id.items():
-                if source_id in current_platform_ids:
-                    filtered_titles_by_id[source_id] = title_data
-                    if source_id in file_id_to_name:
-                        filtered_id_to_name[source_id] = file_id_to_name[source_id]
-
-            titles_by_id = filtered_titles_by_id
-            file_id_to_name = filtered_id_to_name
-
-        final_id_to_name.update(file_id_to_name)
+    if current_platform_ids is not None:
+        filtered_titles_by_id = {}
+        filtered_id_to_name = {}
 
         for source_id, title_data in titles_by_id.items():
-            process_source_data(
-                source_id, title_data, time_info, all_results, title_info
-            )
+            if source_id in current_platform_ids:
+                filtered_titles_by_id[source_id] = title_data
+                if source_id in file_id_to_name:
+                    filtered_id_to_name[source_id] = file_id_to_name[source_id]
+
+        titles_by_id = filtered_titles_by_id
+        file_id_to_name = filtered_id_to_name
+
+    final_id_to_name.update(file_id_to_name)
+
+    for source_id, title_data in titles_by_id.items():
+        process_source_data(
+            source_id, title_data, "latest", all_results, title_info
+        )
 
     return all_results, final_id_to_name, title_info
 
@@ -845,62 +839,9 @@ def process_source_data(
 
 
 def detect_latest_new_titles(current_platform_ids: Optional[List[str]] = None) -> Dict:
-    """检测当日最新批次的新增标题，支持按当前监控平台过滤"""
-    date_folder = format_date_folder()
-    txt_dir = Path("output") / date_folder / "txt"
-
-    if not txt_dir.exists():
-        return {}
-
-    files = sorted([f for f in txt_dir.iterdir() if f.suffix == ".txt"])
-    if len(files) < 2:
-        return {}
-
-    # 解析最新文件
-    latest_file = files[-1]
-    latest_titles, _ = parse_file_titles(latest_file)
-
-    # 如果指定了当前平台列表，过滤最新文件数据
-    if current_platform_ids is not None:
-        filtered_latest_titles = {}
-        for source_id, title_data in latest_titles.items():
-            if source_id in current_platform_ids:
-                filtered_latest_titles[source_id] = title_data
-        latest_titles = filtered_latest_titles
-
-    # 汇总历史标题（按平台过滤）
-    historical_titles = {}
-    for file_path in files[:-1]:
-        historical_data, _ = parse_file_titles(file_path)
-
-        # 过滤历史数据
-        if current_platform_ids is not None:
-            filtered_historical_data = {}
-            for source_id, title_data in historical_data.items():
-                if source_id in current_platform_ids:
-                    filtered_historical_data[source_id] = title_data
-            historical_data = filtered_historical_data
-
-        for source_id, titles_data in historical_data.items():
-            if source_id not in historical_titles:
-                historical_titles[source_id] = set()
-            for title in titles_data.keys():
-                historical_titles[source_id].add(title)
-
-    # 找出新增标题
-    new_titles = {}
-    for source_id, latest_source_titles in latest_titles.items():
-        historical_set = historical_titles.get(source_id, set())
-        source_new_titles = {}
-
-        for title, title_data in latest_source_titles.items():
-            if title not in historical_set:
-                source_new_titles[title] = title_data
-
-        if source_new_titles:
-            new_titles[source_id] = source_new_titles
-
-    return new_titles
+    """检测最新批次的新增标题，支持按当前监控平台过滤"""
+    # 由于现在只保留一个文件，无法进行历史比较，返回空字典
+    return {}
 
 
 # === 统计和分析 ===
@@ -1606,16 +1547,7 @@ def generate_html_report(
     update_info: Optional[Dict] = None,
 ) -> str:
     """生成HTML报告"""
-    if is_daily_summary:
-        if mode == "current":
-            filename = "当前榜单汇总.html"
-        elif mode == "incremental":
-            filename = "当日增量.html"
-        else:
-            filename = "当日汇总.html"
-    else:
-        filename = f"{format_time_filename()}.html"
-
+    filename = "news.html"
     file_path = get_output_path("html", filename)
 
     report_data = prepare_report_data(stats, failed_ids, new_titles, id_to_name, mode)
@@ -4266,7 +4198,7 @@ class NewsAnalyzer:
             )
             return True
         elif CONFIG["ENABLE_NOTIFICATION"] and not has_notification:
-            print("⚠️ 警告：通知功能已启用但未配置任何通知渠道，将跳过通知发送")
+            print("警告：通知功能已启用但未配置任何通知渠道，将跳过通知发送")
         elif not CONFIG["ENABLE_NOTIFICATION"]:
             print(f"跳过{report_type}通知：通知功能已禁用")
         elif (
