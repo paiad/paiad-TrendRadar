@@ -2,8 +2,8 @@ name: Hot News Crawler
 
 on:
   schedule:
-    # 不建议比半小时更低，以免被判定滥用资源
-    - cron: "0 * * * *" # 每小时整点运行一次
+    # 每小时运行一次
+    - cron: "0 * * * *"
   workflow_dispatch:
 
 permissions:
@@ -14,17 +14,25 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # -------------------------------
+      # 1. 拉取仓库（必须 fetch-depth=0）
+      # -------------------------------
       - name: Checkout repository
         uses: actions/checkout@v3
         with:
-          fetch-depth: 0   # 必须拿完整历史，后面要 reset 到远程
+          fetch-depth: 0
 
-      - name: Sync with remote master (hard reset)
+      # -------------------------------
+      # 2. 与远端保持一致（避免冲突）
+      # -------------------------------
+      - name: Sync with remote master (safe reset)
         run: |
           git fetch origin master
-          # 强制把当前分支重置到远程 master，保证工作区是干净的
           git reset --hard origin/master
 
+      # -------------------------------
+      # 3. 设置 Python
+      # -------------------------------
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
@@ -35,24 +43,28 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      # -------------------------------
+      # 4. 检查配置文件
+      # -------------------------------
       - name: Verify required files
         run: |
-          echo "🔍 检查必需的配置文件..."
+          echo "🔍 检查必要配置文件..."
 
           if [ ! -f config/config.yaml ]; then
-            echo "❌ 错误: config/config.yaml 文件不存在"
-            echo "请参考项目文档创建配置文件"
+            echo "❌ config/config.yaml 不存在"
             exit 1
           fi
 
           if [ ! -f config/frequency_words.txt ]; then
-            echo "❌ 错误: config/frequency_words.txt 文件不存在"
-            echo "请参考项目文档创建频率词配置文件"
+            echo "❌ config/frequency_words.txt 不存在"
             exit 1
           fi
 
-          echo "✅ 配置文件检查通过"
+          echo "✅ 配置检查通过"
 
+      # -------------------------------
+      # 5. 运行新闻爬虫
+      # -------------------------------
       - name: Run crawler
         env:
           FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
@@ -71,19 +83,27 @@ jobs:
           GITHUB_ACTIONS: true
         run: python main.py
 
+      # -------------------------------
+      # 6. 自动提交 + 修复 push 冲突
+      # -------------------------------
       - name: Commit and push if changes
         run: |
           set -e
-          git config --global user.name 'GitHub Actions'
-          git config --global user.email 'actions@github.com'
+
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "actions@github.com"
 
           git add -A
 
-          # 如果没有任何变动就直接退出
+          # 无变化则退出
           if git diff --quiet && git diff --staged --quiet; then
             echo "No changes to commit."
             exit 0
           fi
 
           git commit -m "Auto update by GitHub Actions at $(TZ=Asia/Shanghai date)"
+
+          # ⚠ 防止 push 冲突：必须先 pull --rebase
+          git pull origin master --rebase --allow-unrelated-histories || true
+
           git push origin master
