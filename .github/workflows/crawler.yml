@@ -2,8 +2,8 @@ name: Hot News Crawler
 
 on:
   schedule:
-    # 每小时运行一次
-    - cron: "0 * * * *"
+    # 每天早中晚三次：08:00、12:00、18:00（北京时间）
+    - cron: "0 0,4,10 * * *"
   workflow_dispatch:
 
 permissions:
@@ -15,7 +15,7 @@ jobs:
 
     steps:
       # -------------------------------
-      # 1. 拉取仓库（必须 fetch-depth=0）
+      # 1. 拉取仓库
       # -------------------------------
       - name: Checkout repository
         uses: actions/checkout@v3
@@ -23,9 +23,9 @@ jobs:
           fetch-depth: 0
 
       # -------------------------------
-      # 2. 与远端保持一致（避免冲突）
+      # 2. 与远端 master 同步（避免冲突）
       # -------------------------------
-      - name: Sync with remote master (safe reset)
+      - name: Sync with remote master
         run: |
           git fetch origin master
           git reset --hard origin/master
@@ -63,7 +63,7 @@ jobs:
           echo "✅ 配置检查通过"
 
       # -------------------------------
-      # 5. 运行新闻爬虫
+      # 5. 运行爬虫
       # -------------------------------
       - name: Run crawler
         env:
@@ -84,7 +84,7 @@ jobs:
         run: python main.py
 
       # -------------------------------
-      # 6. 自动提交 + 修复 push 冲突
+      # 6. 提交并推送结果
       # -------------------------------
       - name: Commit and push if changes
         run: |
@@ -95,7 +95,6 @@ jobs:
 
           git add -A
 
-          # 无变化则退出
           if git diff --quiet && git diff --staged --quiet; then
             echo "No changes to commit."
             exit 0
@@ -103,7 +102,7 @@ jobs:
 
           git commit -m "Auto update by GitHub Actions at $(TZ=Asia/Shanghai date)"
 
-          # ⚠ 防止 push 冲突：必须先 pull --rebase
+          # 防止冲突，先 pull --rebase
           git pull origin master --rebase --allow-unrelated-histories || true
 
           git push origin master
